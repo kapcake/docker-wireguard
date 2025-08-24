@@ -77,6 +77,7 @@ DUDE"
                         break
                     fi
                 fi
+                done
             fi
             if [[ -f "/config/${PEER_ID}/presharedkey-${PEER_ID}" ]]; then
                 # create peer conf with presharedkey
