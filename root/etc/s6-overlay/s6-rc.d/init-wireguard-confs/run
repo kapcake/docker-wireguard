@@ -50,18 +50,33 @@ DUDE"
                 wg genpsk > "/config/${PEER_ID}/presharedkey-${PEER_ID}"
             fi
             if [[ -f "/config/${PEER_ID}/${PEER_ID}.conf" ]]; then
-                CLIENT_IP=$(grep "Address" "/config/${PEER_ID}/${PEER_ID}.conf" | awk '{print $NF}')
+                CLIENT_IPS=$(grep -E "^Address" "/config/${PEER_ID}/${PEER_ID}.conf" \
+                    | cut -d= -f2 \
+                    | tr -d ' ' \
+                    | tr ',' '\n')
+                CLIENT_IPV4=$(echo "$CLIENT_IPS" | grep -m1 -oE '([0-9]{1,3}\.){3}[0-9]{1,3}(/\d+)?')
+                CLIENT_IPV6=$("${ENABLE_IPV6,,}" == "true" && echo "$CLIENT_IPS" | grep -m1 -oE '([0-9a-fA-F]*:)+[0-9]*(/[0-9]+)?')
                 if [[ -n "${ORIG_INTERFACE}" ]] && [[ "${INTERFACE}" != "${ORIG_INTERFACE}" ]]; then
-                    CLIENT_IP="${CLIENT_IP//${ORIG_INTERFACE}/${INTERFACE}}"
+                    CLIENT_IPV4="${CLIENT_IPV4//${ORIG_INTERFACE}/${INTERFACE}}"
+                fi
+                if [[ "${ENABLE_IPV6,,}" == "true" ]] && [[ -n "${CLIENT_IPV6}" ]] && [[ -n "${ORIG_INTERFACE6}" ]] && [[ "${INTERFACE6}" != "${ORIG_INTERFACE6}" ]]; then
+                    CLIENT_IPV6="${CLIENT_IPV6//${ORIG_INTERFACE6}/${INTERFACE6}}"
                 fi
             else
                 for idx in {2..254}; do
                 PROPOSED_IP="${INTERFACE}.${idx}"
                 if ! grep -q -R "${PROPOSED_IP}" /config/peer*/*.conf 2>/dev/null && ([[ -z "${ORIG_INTERFACE}" ]] || ! grep -q -R "${ORIG_INTERFACE}.${idx}" /config/peer*/*.conf 2>/dev/null); then
-                    CLIENT_IP="${PROPOSED_IP}"
-                    break
+                    CLIENT_IPV4="${PROPOSED_IP}"
+                    if [[ "${ENABLE_IPV6,,}" == "true" ]]; then
+                        PROPOSED_IP6="${INTERFACE6}${idx}"
+                        if ! grep -q -R "${PROPOSED_IP6}" /config/peer*/*.conf 2>/dev/null && ([[ -z "${ORIG_INTERFACE6}" ]] || ! grep -q -R "${ORIG_INTERFACE6}${idx}" /config/peer*/*.conf 2>/dev/null); then
+                            CLIENT_IPV6="${PROPOSED_IP6}"
+                            break
+                        fi
+                    else
+                        break
+                    fi
                 fi
-                done
             fi
             if [[ -f "/config/${PEER_ID}/presharedkey-${PEER_ID}" ]]; then
                 # create peer conf with presharedkey
@@ -95,11 +110,11 @@ DUDE
             if [[ -n "${!SERVER_ALLOWEDIPS}" ]]; then
                 echo "Adding ${!SERVER_ALLOWEDIPS} to wg0.conf's AllowedIPs for peer ${i}"
                 cat <<DUDE >> /config/wg_confs/wg0.conf
-AllowedIPs = ${CLIENT_IP}/32,${!SERVER_ALLOWEDIPS}
+AllowedIPs = ${CLIENT_IPV4}/32${CLIENT_IPV6:+,${CLIENT_IPV6}/128},${!SERVER_ALLOWEDIPS}
 DUDE
             else
                 cat <<DUDE >> /config/wg_confs/wg0.conf
-AllowedIPs = ${CLIENT_IP}/32
+AllowedIPs = ${CLIENT_IPV4}/32${CLIENT_IPV6:+,${CLIENT_IPV6}/128}
 DUDE
             fi
             # add PersistentKeepalive if the peer is specified
@@ -131,6 +146,7 @@ ORIG_SERVERPORT="$SERVERPORT"
 ORIG_PEERDNS="$PEERDNS"
 ORIG_PEERS="$PEERS"
 ORIG_INTERFACE="$INTERFACE"
+ORIG_INTERFACE6="$INTERFACE6"
 ORIG_ALLOWEDIPS="$ALLOWEDIPS"
 ORIG_PERSISTENTKEEPALIVE_PEERS="$PERSISTENTKEEPALIVE_PEERS"
 DUDE
@@ -158,11 +174,19 @@ if [[ -n "$PEERS" ]]; then
     INTERNAL_SUBNET=${INTERNAL_SUBNET:-10.13.13.0}
     echo "**** Internal subnet is set to $INTERNAL_SUBNET ****"
     INTERFACE=$(echo "$INTERNAL_SUBNET" | awk 'BEGIN{FS=OFS="."} NF--')
+    if [[ "${ENABLE_IPV6,,}" == "true" ]]; then
+        INTERNAL_SUBNET6=${INTERNAL_SUBNET6:-fd42:42:42::/64}
+        echo "**** Internal IPv6 subnet is set to $INTERNAL_SUBNET6 ****"
+        INTERFACE6=$(echo "$INTERNAL_SUBNET6" | sed -E 's/::\/[0-9]+$/'::'/')
+    fi
     ALLOWEDIPS=${ALLOWEDIPS:-0.0.0.0/0, ::/0}
     echo "**** AllowedIPs for peers $ALLOWEDIPS ****"
     if [[ -z "$PEERDNS" ]] || [[ "$PEERDNS" = "auto" ]]; then
         PEERDNS="${INTERFACE}.1"
-        echo "**** PEERDNS var is either not set or is set to \"auto\", setting peer DNS to ${INTERFACE}.1 to use wireguard docker host's DNS. ****"
+        if [[ "${ENABLE_IPV6,,}" == "true" ]]; then
+            PEERDNS="${PEERDNS},${INTERFACE6}1"
+        fi
+        echo "**** PEERDNS var is either not set or is set to \"auto\", setting peer DNS to ${PEERDNS}. ****"
     else
         echo "**** Peer DNS servers will be set to $PEERDNS ****"
     fi
@@ -175,7 +199,7 @@ if [[ -n "$PEERS" ]]; then
         if [[ -f /config/.donoteditthisfile ]]; then
             . /config/.donoteditthisfile
         fi
-        if [[ "$SERVERURL" != "$ORIG_SERVERURL" ]] || [[ "$SERVERPORT" != "$ORIG_SERVERPORT" ]] || [[ "$PEERDNS" != "$ORIG_PEERDNS" ]] || [[ "$PEERS" != "$ORIG_PEERS" ]] || [[ "$INTERFACE" != "$ORIG_INTERFACE" ]] || [[ "$ALLOWEDIPS" != "$ORIG_ALLOWEDIPS" ]] || [[ "$PERSISTENTKEEPALIVE_PEERS" != "$ORIG_PERSISTENTKEEPALIVE_PEERS" ]]; then
+        if [[ "$SERVERURL" != "$ORIG_SERVERURL" ]] || [[ "$SERVERPORT" != "$ORIG_SERVERPORT" ]] || [[ "$PEERDNS" != "$ORIG_PEERDNS" ]] || [[ "$PEERS" != "$ORIG_PEERS" ]] || [[ "$INTERFACE" != "$ORIG_INTERFACE" ]] || [[ "$INTERFACE6" != "$ORIG_INTERFACE6" ]] || [[ "$ALLOWEDIPS" != "$ORIG_ALLOWEDIPS" ]] || [[ "$PERSISTENTKEEPALIVE_PEERS" != "$ORIG_PERSISTENTKEEPALIVE_PEERS" ]]; then
             echo "**** Server related environment variables changed, regenerating 1 server and ${PEERS} peer/client confs ****"
             generate_confs
             save_vars
